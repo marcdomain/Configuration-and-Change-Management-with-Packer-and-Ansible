@@ -1,0 +1,109 @@
+---
+- hosts: all
+  remote_user: ubuntu
+  become_method: sudo
+  become: true
+  vars:
+    project_name: "Authors Haven Frontend App"
+    project_path: /home/ubuntu/balder-ah-frontend
+    sites_available: /etc/nginx/sites-available
+    sites_enabled: /etc/nginx/sites-enabled"
+    sites_available_balder: /etc/nginx/sites-available/balder
+    sites_enabled_balder: /etc/nginx/sites-enabled/balder
+    PM2_PATH: $PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ubuntu --hp /home/ubuntu
+  tasks:
+    - name: Reset contents of apt list
+      shell: |
+        sudo rm -rf /var/lib/apt/lists/*
+        sudo apt-get update
+
+    - name: Get Nodejs gpg key
+      apt_key:
+        url: "https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
+        state: present
+
+    - name: Install Nodejs version 10 binary
+      apt_repository:
+        repo: "deb https://deb.nodesource.com/node_10.x {{ ansible_distribution_release }} main"
+        state: present
+
+    - name: Install Node
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Clone the repository
+      git:
+        repo: https://github.com/andela/balder-ah-frontend.git
+        dest: "{{ project_path }}"
+
+    - name: Install node packages
+      shell: |
+        npm install node-pre-gyp -ES --unsafe-perm=true
+        npm i -ES --unsafe-perm=true
+      args:
+        chdir: "{{ project_path }}"
+
+    - name: Build app
+      shell: npm run build
+      args:
+        chdir: "{{ project_path }}"
+
+    - name: Install nginx
+      apt:
+        name: nginx
+        state: latest
+
+    - name: Delete nginx default file
+      file:
+        path: "{{ sites_available }}/default"
+        state: absent
+
+    - name: Configure nginx server
+      shell: |
+        echo "
+          server  {
+            listen 80;
+            location / {
+              proxy_pass http://127.0.0.1:3000;
+            }
+          }
+        " > {{ sites_available_balder }}
+
+    - name: Update nginx symlink
+      file:
+        src={{ sites_available_balder }}
+        dest={{ sites_enabled_balder }}
+        state=link
+
+    - name: Start nginx
+      service: 
+        name: nginx
+        state: started
+
+    - name: Install pm2 to run app in background
+      shell: npm install pm2 -g
+
+    - name: Create pm2 start script
+      shell: |
+        cd /home/ubuntu/balder-ah-frontend
+        echo '
+          {
+            "apps": [
+              {
+                "name": "authors-haven",
+                "script": "npm",
+                "args": "run start:dev"
+              }
+            ]
+          }
+        ' > start_script.config.json
+    
+    - name: Start app with pm2
+      shell: |
+        cd /home/ubuntu/balder-ah-frontend
+        sudo pm2 start ./start_script.config.json
+        sleep 10
+        sudo pm2 startup
+        sudo env PATH={{PM2_PATH}}
+        sudo pm2 save
